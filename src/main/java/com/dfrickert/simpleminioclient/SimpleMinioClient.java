@@ -2,49 +2,46 @@ package com.dfrickert.simpleminioclient;
 
 import com.dfrickert.simpleminioclient.auth.Credentials;
 import org.apache.commons.codec.digest.DigestUtils;
+import org.apache.http.Header;
+import org.apache.http.client.methods.*;
+import org.apache.http.entity.BufferedHttpEntity;
+import org.apache.http.entity.ByteArrayEntity;
+import org.apache.http.entity.FileEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClientBuilder;
+import org.apache.http.message.BasicHeader;
+import org.apache.http.util.EntityUtils;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.Base64;
+import java.util.LinkedList;
+import java.util.List;
 
 public class SimpleMinioClient {
     private static final String SEP = "/";
 
     private final String minioLocation;
     private final Credentials accessCredentials;
-    private HttpClient client;
-    private final ExecutorService threadPool;
+    private CloseableHttpClient client;
 
     public SimpleMinioClient(final String minioLocation,
                              final Credentials accessCredentials,
-                             final HttpClient client) {
+                             final CloseableHttpClient client) {
         this.minioLocation = minioLocation;
         this.accessCredentials = accessCredentials;
         this.client = client;
-        this.threadPool = (ExecutorService) client.executor().orElse(null);
     }
 
     public SimpleMinioClient(final String minioLocation,
                              final Credentials accessCredentials) {
         this(minioLocation, accessCredentials,
-                HttpClient.newBuilder()
-                        .version(HttpClient.Version.HTTP_2)
-                        .followRedirects(HttpClient.Redirect.NORMAL)
-                        .connectTimeout(Duration.ofSeconds(20))
-                        .executor(Executors.newCachedThreadPool())
-                        .build());
+                HttpClientBuilder.create().build());
     }
 
     public InputStream get(final String bucket,
@@ -53,28 +50,46 @@ public class SimpleMinioClient {
 
         final URI uri = URI.create(minioLocation + SEP + bucketUrl + SEP + object);
 
-        final HttpRequest request = HttpRequest.newBuilder(uri)
-                .timeout(Duration.ofSeconds(15))
-                .headers(headers())
-                .GET()
-                .build();
+        final HttpRequestBase request = new HttpGet(uri);
+        request.setHeaders(headers());
 
-        return client.send(request, HttpResponse.BodyHandlers.ofInputStream()).body();
+        final CloseableHttpResponse response = client.execute(request);
+
+        final InputStream content = response.getEntity().getContent();
+
+        return content;
+    }
+
+    public void put(final String bucket,
+                    final  String fileName,
+                    final InputStream object) throws IOException {
+        final String bucketUrl = bucket.replace(".", "/");
+
+        final URI uri = URI.create(minioLocation + SEP + bucketUrl + SEP + fileName);
+
+        final HttpEntityEnclosingRequestBase request = new HttpPut(uri);
+        byte[] bytes = object.readAllBytes();
+        request.setHeaders(headers(bytes));
+        request.setEntity(new ByteArrayEntity(bytes));
+
+        client.execute(request);
     }
 
     public void close() {
-        if (threadPool != null) {
-            threadPool.shutdownNow();
+        try {
+            client.close();
+        } catch (IOException ignored) {
+
         }
         client = null;
     }
 
-    private String[] headers() {
+    private Header[] headers() {
         return headers(null);
     }
 
-    private String[] headers(byte[] body) {
-        List<String> headers = new LinkedList<>();
+    private Header[] headers(byte[] body) {
+        List<Header> headers = new LinkedList<>();
 
         String sha256Hash = null;
         String md5Hash = null;
@@ -92,36 +107,33 @@ public class SimpleMinioClient {
         }
 
         if (md5Hash != null) {
-            headers.add("Content-MD5");
-            headers.add(md5Hash);
+            headers.add(new BasicHeader("Content-MD5", md5Hash));
         }
 
         if (sha256Hash != null) {
-            headers.add("x-amz-content-sha256");
-            headers.add(sha256Hash);
+            headers.add(new BasicHeader("x-amz-content-sha256", sha256Hash));
         }
 
         Instant now = Instant.now();
         DateTimeFormatter AMZ_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'")
                 .withZone(ZoneId.from(ZoneOffset.UTC));
 
-        headers.add("x-amz-date");
-        headers.add(AMZ_FORMATTER.format(now));
+        headers.add(new BasicHeader("x-amz-date", AMZ_FORMATTER.format(now)));
 
-        headers.add("User-Agent");
-        headers.add("MinIO (Linux; amd64) minio-java/dev");
+        headers.add(new BasicHeader("User-Agent", "MinIO (Linux; amd64) minio-java/dev"));
 
-        /* Doesn't work - restricted header
-        headers.add("Connection");
-        headers.add("close");
-		/*
+        headers.add(new BasicHeader("Connection", "close"));
+
+        /*
 		if (length > 0) {
 			var requestBody = BodyInserters.fromPublisher(Mono.just(body), byte[].class);
 			result = requestBuilder.body(requestBody);
 		} else {
 			result = requestBuilder;
 		}
-		 */
-        return headers.toArray(new String[0]);
+
+         */
+
+        return headers.toArray(new Header[0]);
     }
 }
