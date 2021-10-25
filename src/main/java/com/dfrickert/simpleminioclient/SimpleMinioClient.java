@@ -44,7 +44,7 @@ public class SimpleMinioClient {
                 HttpClientBuilder.create().build());
     }
 
-    public InputStream get(final String bucket,
+    public CloseableHttpResponse get(final String bucket,
                            final String object) throws IOException, InterruptedException {
         final String bucketUrl = bucket.replace(".", "/");
 
@@ -53,14 +53,10 @@ public class SimpleMinioClient {
         final HttpRequestBase request = new HttpGet(uri);
         request.setHeaders(headers());
 
-        final CloseableHttpResponse response = client.execute(request);
-
-        final InputStream content = response.getEntity().getContent();
-
-        return content;
+        return client.execute(request);
     }
 
-    public void put(final String bucket,
+    public CloseableHttpResponse put(final String bucket,
                     final  String fileName,
                     final InputStream object) throws IOException {
         final String bucketUrl = bucket.replace(".", "/");
@@ -72,7 +68,7 @@ public class SimpleMinioClient {
         request.setHeaders(headers(bytes));
         request.setEntity(new ByteArrayEntity(bytes));
 
-        client.execute(request);
+        return client.execute(request);
     }
 
     public void close() {
